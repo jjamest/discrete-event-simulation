@@ -43,7 +43,7 @@ class Simulator:
         """Create a shared resource with limited capacity."""
         return Resource(self, capacity)
 
-    def any_of(self, events: list["Event"]) -> "Event":
+    def any_of(self, events: list[Event]) -> Event:
         """Returns an Event that fires with the first event in `events` to fire."""
         result = Event()
 
@@ -55,7 +55,7 @@ class Simulator:
             ev.add_callback(on_any)
         return result
 
-    def all_of(self, events: list["Event"]) -> "Event":
+    def all_of(self, events: list[Event]) -> Event:
         """Returns an Event that fires once every event in `events` has fired."""
         result = Event()
         events = list(events)
