@@ -4,22 +4,25 @@ from collections import deque
 from typing import Optional, TYPE_CHECKING
 
 from ordo.event import Event
+from ordo.stats import UsageStats
 
 if TYPE_CHECKING:
     from ordo.simulator import Simulator
 
 TIMEOUT = object()  # sentinel distinct from a legitimate None item
 
-# Waiter entries are [priority, seq, Event, settled, item] lists (a heap
-# needs a plain sequence, not a dataclass) - named indices keep call sites
-# readable. Put-waiter entries carry the pending item from the start (it's
-# the payload of the request itself). Get-waiter entries start with item
-# slot None and only get one written in (by _wake_a_getter, at the same
-# moment `settled` flips to True) once a grant is decided - this lets
-# abandonment cleanup recover a granted-but-undelivered item without
-# racing result.succeed()'s own scheduled callback (see get()'s except
-# block for why entry[_SETTLED] can be True before result.triggered is).
-_PRIORITY, _SEQ, _EVENT, _SETTLED, _ITEM = range(5)
+# Waiter entries are [priority, seq, Event, settled, item, request_time]
+# lists (a heap needs a plain sequence, not a dataclass) - named indices
+# keep call sites readable. Put-waiter entries carry the pending item from
+# the start (it's the payload of the request itself). Get-waiter entries
+# start with item slot None and only get one written in (by
+# _wake_a_getter, at the same moment `settled` flips to True) once a grant
+# is decided - this lets abandonment cleanup recover a granted-but-
+# undelivered item without racing result.succeed()'s own scheduled
+# callback (see get()'s except block for why entry[_SETTLED] can be True
+# before result.triggered is). request_time is the sim.now the entry was
+# enqueued, used for get-side wait-time stats (see Store.stats).
+_PRIORITY, _SEQ, _EVENT, _SETTLED, _ITEM, _REQUEST_TIME = range(6)
 
 
 class Store:
@@ -36,19 +39,28 @@ class Store:
         self.sim = sim
         self.capacity = capacity
         self._items = deque()
-        self._get_waiters = []  # heap of [priority, seq, Event, settled]
-        self._put_waiters = []  # heap of [priority, seq, Event, settled, item]
+        self._get_waiters = []  # heap of [priority, seq, Event, settled, item, request_time]
+        self._put_waiters = []  # heap of [priority, seq, Event, settled, item, request_time]
         self._counter = itertools.count()
+        # busy_units tracks len(self._items) (occupied capacity);
+        # queue_length tracks get-side waiters only. Simplification: a
+        # Store has two waiter populations (_get_waiters, _put_waiters),
+        # but get-side blocking (consumers waiting for items) is the more
+        # common bottleneck to monitor, so a single UsageStats tracks that
+        # one queue. Put-side queueing (producers blocked on a full store)
+        # is not separately reported.
+        self.stats = UsageStats(sim, capacity)
 
     async def put(self, item, timeout: Optional[float] = None, priority: int = 0) -> bool:
         if len(self._items) < self.capacity:
             self._items.append(item)
+            self.stats._busy_changed(len(self._items))
             self._wake_a_getter()
             return True
 
         result = Event()
         seq = next(self._counter)
-        entry = [priority, seq, result, False, item]
+        entry = [priority, seq, result, False, item, self.sim.now]
         heapq.heappush(self._put_waiters, entry)
 
         if timeout is not None:
@@ -105,20 +117,21 @@ class Store:
     async def get(self, timeout: Optional[float] = None, priority: int = 0):
         if self._items:
             item = self._items.popleft()
+            self.stats._busy_changed(len(self._items))
             self._wake_a_putter()
             return item
 
         result = Event()
         seq = next(self._counter)
-        entry = [priority, seq, result, False, None]
+        entry = [priority, seq, result, False, None, self.sim.now]
         heapq.heappush(self._get_waiters, entry)
+        self.stats._queue_changed(len(self._get_waiters))
 
         if timeout is not None:
             def on_timeout(entry=entry):
                 if entry[_SETTLED]:
                     return
-                entry[_SETTLED] = True
-                self._remove(self._get_waiters, entry)
+                self._remove_get_waiter(entry)
                 result.succeed(TIMEOUT)
 
             self.sim.schedule_call(timeout, on_timeout)
@@ -157,12 +170,39 @@ class Store:
             # such gap: it's written at the same synchronous instant as
             # entry[_SETTLED].
             if not entry[_SETTLED]:
-                entry[_SETTLED] = True
-                self._remove(self._get_waiters, entry)
+                self._remove_get_waiter(entry)
             else:
+                # The item was already popped out of self._items by
+                # _wake_a_getter (busy count already dropped) with nobody
+                # left to receive it. Putting it back at the front restores
+                # self._items to what an external observer would consider
+                # unchanged overall -- the item's presence in the store
+                # never really left, it was just earmarked for a getter who
+                # then abandoned -- so appendleft's busy_changed and the
+                # immediately-following _wake_a_getter() call (which may
+                # hand the item straight to a different waiter, popping it
+                # right back out) net out correctly between themselves:
+                # either the second call finds no other waiter and busy
+                # ends up back where it started, or it does and the item's
+                # departure is recorded again for the new recipient.
                 self._items.appendleft(entry[_ITEM])
+                self.stats._busy_changed(len(self._items))
                 self._wake_a_getter()
             raise
+
+    def _remove_get_waiter(self, entry) -> None:
+        """Mark a get-waiter entry settled and drop it from the heap.
+
+        Single chokepoint for a get-waiter leaving the queue without being
+        granted an item (timeout-renege and abandonment cleanup both use
+        this), so it's also the single place that updates get-side queue
+        stats for that transition.
+        """
+        already_settled = entry[_SETTLED]
+        entry[_SETTLED] = True
+        self._remove(self._get_waiters, entry)
+        if not already_settled:
+            self.stats._queue_changed(len(self._get_waiters))
 
     def _wake_a_getter(self) -> None:
         while self._get_waiters:
@@ -170,7 +210,10 @@ class Store:
             if entry[_SETTLED]:
                 continue
             entry[_SETTLED] = True
+            self.stats._queue_changed(len(self._get_waiters))
+            self.stats._record_wait(self.sim.now - entry[_REQUEST_TIME])
             item = self._items.popleft()
+            self.stats._busy_changed(len(self._items))
             entry[_ITEM] = item
             self.sim.schedule_call(0.0, lambda e=entry, i=item: e[_EVENT].succeed(i))
             self._wake_a_putter()
@@ -183,6 +226,7 @@ class Store:
                 continue
             entry[_SETTLED] = True
             self._items.append(entry[_ITEM])
+            self.stats._busy_changed(len(self._items))
             self.sim.schedule_call(0.0, lambda e=entry: e[_EVENT].succeed(True))
             self._wake_a_getter()
             return

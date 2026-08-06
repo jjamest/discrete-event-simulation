@@ -3,31 +3,17 @@ import itertools
 from typing import Optional, TYPE_CHECKING
 
 from ordo.event import Event
+from ordo.stats import UsageStats
 
 if TYPE_CHECKING:
     from ordo.simulator import Simulator
 
-# Waiter entries are [priority, seq, Event, settled] lists (a heap needs a
-# plain sequence, not a dataclass) - named indices keep call sites readable.
-_PRIORITY, _SEQ, _EVENT, _SETTLED = range(4)
-
-
-# temporary stub -- replaced in Task 9 with a real implementation in stats.py
-class ResourceStats:
-    def __init__(self, sim, resource):
-        pass
-
-    def _record_wait(self, wait):
-        pass
-
-    def _enter_queue(self):
-        pass
-
-    def _leave_queue(self):
-        pass
-
-    def _utilization_changed(self):
-        pass
+# Waiter entries are [priority, seq, Event, settled, request_time] lists (a
+# heap needs a plain sequence, not a dataclass) - named indices keep call
+# sites readable. request_time is the sim.now at which the entry was
+# enqueued, used to compute wait duration when it's eventually granted (or
+# to compute nothing, if it's instead reneged/abandoned).
+_PRIORITY, _SEQ, _EVENT, _SETTLED, _REQUEST_TIME = range(5)
 
 
 class Resource:
@@ -39,9 +25,9 @@ class Resource:
         self.sim = sim
         self.capacity = capacity
         self.in_use = 0
-        self._waiters = []  # heap of entries, see _PRIORITY/_SEQ/_EVENT/_SETTLED
+        self._waiters = []  # heap of entries, see _PRIORITY/_SEQ/_EVENT/_SETTLED/_REQUEST_TIME
         self._counter = itertools.count()
-        self.stats = ResourceStats(sim, self)
+        self.stats = UsageStats(sim, capacity)
 
     def acquire(self, timeout: Optional[float] = None, priority: int = 0):
         """Awaitable/async-context-manager that blocks the caller until a slot is free.
@@ -66,23 +52,25 @@ class Resource:
         """
         result = Event()
         if self.in_use < self.capacity:
+            # Granted immediately: no queueing occurred, so this is not a
+            # "wait" sample -- wait_times only records time actually spent
+            # queued (see release()'s grant-to-waiter branch).
             self.in_use += 1
-            self.stats._record_wait(0.0)
+            self.stats._busy_changed(self.in_use)
             self.sim.schedule_call(0.0, lambda: result.succeed(True))
             return result, None
 
         seq = next(self._counter)
-        entry = [priority, seq, result, False]
+        now = self.sim.now
+        entry = [priority, seq, result, False, now]
         heapq.heappush(self._waiters, entry)
-        self.stats._enter_queue()
+        self.stats._queue_changed(len(self._waiters))
 
         if timeout is not None:
             def on_timeout(entry=entry):
                 if entry[_SETTLED]:
                     return
-                entry[_SETTLED] = True
                 self._remove_waiter(entry)
-                self.stats._leave_queue()
                 result.succeed(False)
 
             self.sim.schedule_call(timeout, on_timeout)
@@ -98,11 +86,20 @@ class Resource:
         before being granted a slot, this removes it so a later release()
         can never resolve its Event a second time or hand a slot to a
         coroutine that isn't waiting for it anymore.
+
+        This is the single place a waiter leaves the queue without being
+        granted a slot (timeout-renege and abandonment both funnel through
+        here), so it's also the single place that updates queue-length
+        stats for that transition -- callers don't need to remember to do
+        it themselves.
         """
+        already_settled = entry[_SETTLED]
         entry[_SETTLED] = True
         try:
             self._waiters.remove(entry)
             heapq.heapify(self._waiters)
+            if not already_settled:
+                self.stats._queue_changed(len(self._waiters))
         except ValueError:
             pass
 
@@ -113,12 +110,12 @@ class Resource:
             if entry[_SETTLED]:
                 continue  # already reneged/abandoned; skip and try the next waiter
             entry[_SETTLED] = True
-            self.stats._leave_queue()
-            self.stats._record_wait(0.0)
+            self.stats._queue_changed(len(self._waiters))
+            self.stats._record_wait(self.sim.now - entry[_REQUEST_TIME])
             entry[_EVENT].succeed(True)
             return
         self.in_use -= 1
-        self.stats._utilization_changed()
+        self.stats._busy_changed(self.in_use)
 
     @property
     def queue(self):
