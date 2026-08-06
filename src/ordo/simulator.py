@@ -15,16 +15,28 @@ class Simulator:
         self._process_by_coro: dict = {}
 
     def schedule(self, delay: float, coroutine: Coroutine, value: Any = None) -> None:
-        """Schedule a coroutine to resume after some delay, sending it `value`."""
+        """Schedule a coroutine to resume after some delay, sending it `value`.
+
+        Snapshots the owning Process's current `generation` (if any) into
+        the heap entry. If that Process is later resumed out-of-band
+        (e.g. via interrupt()) before this entry is popped, its generation
+        will have moved on, and `run()` will recognize this entry as stale
+        and drop it instead of driving the coroutine a second time.
+        Coroutines with no owning Process (there is currently no such path
+        in practice - see Simulator.process()) get generation `None`,
+        which always compares as valid.
+        """
         event_time = self.now + delay # when the event should be executed
         tiebreaker = next(self._counter)
-        heapq.heappush(self.events, (event_time, tiebreaker, coroutine, value)) # (time, priority tiebreaker, coroutine, value)
+        proc = self._process_by_coro.get(coroutine)
+        generation = proc.generation if proc is not None else None
+        heapq.heappush(self.events, (event_time, tiebreaker, coroutine, value, generation)) # (time, priority tiebreaker, coroutine, value, generation)
 
     def schedule_call(self, delay: float, func) -> None:
         """Schedule a zero-arg callback to run after some delay (not a coroutine)."""
         event_time = self.now + delay
         tiebreaker = next(self._counter)
-        heapq.heappush(self.events, (event_time, tiebreaker, func, None))
+        heapq.heappush(self.events, (event_time, tiebreaker, func, None, None))
 
     def sleep(self, delay: float):
         """Awaitable sleep that pauses the caller coroutine and schedules resumption"""
@@ -140,7 +152,7 @@ class Simulator:
     def run(self, until: float = float("inf")) -> None:
         """Main event loop"""
         while self.events:
-            event_time, _, target, value = heapq.heappop(self.events)
+            event_time, _, target, value, generation = heapq.heappop(self.events)
 
             if event_time > until: # or >=
                 break
@@ -148,6 +160,15 @@ class Simulator:
             self.now = event_time # push clock forward
 
             if isinstance(target, Coroutine):
+                proc = self._process_by_coro.get(target)
+                current_generation = proc.generation if proc is not None else None
+                if generation != current_generation:
+                    # Stale entry: superseded by an out-of-band resumption
+                    # (e.g. interrupt()) that has already driven this
+                    # coroutine past this suspension point. Silently drop
+                    # it instead of calling coro.send()/coro.throw() on a
+                    # coroutine that may already be finished.
+                    continue
                 self._resume(target, value)
             else:
                 target() # plain zero-arg callback
