@@ -25,6 +25,8 @@ def test_len_reflects_pending_events():
     sim.process(worker())
     assert len(sim) == 1
 
+    sim.run()  # drain so `worker`'s coroutine is actually driven to completion
+
 
 def test_run_until_event():
     sim = Simulator()
