@@ -1,12 +1,13 @@
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 
 class Event:
     """A one-shot signal that coroutines can await.
 
     Triggers exactly once via succeed()/fail(). Awaiting an already-
-    triggered event resolves immediately (see await support added in
-    Task 2, once the simulator drives Event-based yields).
+    triggered event resolves immediately; awaiting one that hasn't
+    fired yet suspends until it does (driven by the Simulator's event
+    loop).
     """
 
     __slots__ = ("triggered", "ok", "value", "exception", "_callbacks")
@@ -16,7 +17,7 @@ class Event:
         self.ok: Optional[bool] = None
         self.value: Any = None
         self.exception: Optional[BaseException] = None
-        self._callbacks: list = []
+        self._callbacks: list[Callable[["Event"], None]] = []
 
     def succeed(self, value: Any = None) -> None:
         if self.triggered:
@@ -39,7 +40,7 @@ class Event:
         for cb in callbacks:
             cb(self)
 
-    def add_callback(self, cb) -> None:
+    def add_callback(self, cb: Callable[["Event"], None]) -> None:
         """Register a callback(event) to run when the event fires.
 
         If already triggered, the callback runs immediately.
