@@ -1,6 +1,6 @@
 import heapq
 import itertools
-from typing import Coroutine, Any, Optional
+from typing import Coroutine, Any, Optional, Union
 
 import numpy as np
 
@@ -208,7 +208,7 @@ class Simulator:
         """Number of events currently pending on the heap."""
         return len(self.events)
 
-    def run(self, until=float("inf")) -> None:
+    def run(self, until: Union[float, Event] = float("inf")) -> None:
         """Main event loop.
 
         `until` may be a time (float) - run until no event remains at or
