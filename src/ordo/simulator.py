@@ -115,7 +115,7 @@ class Simulator:
             proc = self._process_by_coro.pop(coro, None)
             if proc is not None and not proc.triggered:
                 proc.succeed(stop.value)
-        except BaseException as exc:
+        except Exception as exc:
             # the coroutine raised; fail its Process, escalating to a
             # SimulationError if nobody was awaiting it
             proc = self._process_by_coro.pop(coro, None)
