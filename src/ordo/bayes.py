@@ -32,7 +32,13 @@ class GammaPoissonBelief:
         """Posterior mean estimate of expected delay (seconds / job)."""
         return self.rate / (self.shape - 1.0) if self.shape > 1.0 else float("inf")
 
-    def sample_rate(self) -> float:
-        """Thompson Sampling: Draw a plausible service rate lambda from posterior distribution."""
-        return np.random.gamma(shape=self.shape, scale=1.0 / self.rate)
+    def sample_rate(self, rng=None) -> float:
+        """Thompson Sampling: Draw a plausible service rate lambda from posterior distribution.
+
+        `rng`, if given, is a `numpy.random.Generator` (e.g. from
+        `np.random.default_rng(seed)`) used for reproducible draws.
+        Defaults to the global `numpy.random` module state.
+        """
+        generator = rng if rng is not None else np.random
+        return generator.gamma(shape=self.shape, scale=1.0 / self.rate)
     

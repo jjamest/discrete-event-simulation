@@ -64,3 +64,10 @@ def test_belief_converges_to_true_rate():
         belief.observe(float(delay))
 
     assert belief.mean == pytest.approx(true_lambda, rel=0.05)
+
+
+def test_sample_rate_with_explicit_generator_reproducible():
+    belief = GammaPoissonBelief(shape=3.0, rate=2.0)
+    rng1 = np.random.default_rng(7)
+    rng2 = np.random.default_rng(7)
+    assert belief.sample_rate(rng=rng1) == belief.sample_rate(rng=rng2)

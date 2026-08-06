@@ -2,17 +2,20 @@ import heapq
 import itertools
 from typing import Coroutine, Any, Optional
 
+import numpy as np
+
 from ordo.event import Event
 from ordo.exceptions import Interrupt, SimulationError
 from ordo.process import Process
 from ordo.resource import Resource
 
 class Simulator:
-    def __init__(self):
+    def __init__(self, seed: Optional[int] = None) -> None:
         self.now: float = 0.0
         self.events = [] # heap
         self._counter = itertools.count()
         self._process_by_coro: dict = {}
+        self.rng = np.random.default_rng(seed)
 
     def schedule(self, delay: float, coroutine: Coroutine, value: Any = None) -> None:
         """Schedule a coroutine to resume after some delay, sending it `value`.
