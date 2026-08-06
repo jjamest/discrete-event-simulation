@@ -66,3 +66,34 @@ def test_multiple_awaiters_all_resumed():
     sim.schedule_call(3.0, lambda: ev.succeed("done"))
     sim.run(until=10)
     assert sorted(log) == [("a", "done"), ("b", "done")]
+
+
+def test_event_resumption_goes_behind_same_tick_work_already_queued():
+    """Resuming an event-awaiter must be re-scheduled via schedule_call,
+    not run inline from within Event._fire_callbacks.
+
+    If it ran inline, the resumed coroutine's effect would jump ahead of
+    other same-tick work that was already sitting in the heap (queued
+    before the succeed() call fires the callback). Because the real
+    implementation enqueues the resumption fresh with a brand new
+    tiebreaker, it must land behind anything already queued for tick 0.
+    """
+    sim = Simulator()
+    ev = Event()
+    log = []
+
+    async def waiter():
+        await ev
+        log.append("waiter-resumed")
+
+    def trigger():
+        ev.succeed("go")
+        log.append("trigger")
+
+    sim.process(waiter())  # tiebreaker 0: suspends, registers on_fire callback
+    sim.schedule_call(0.0, trigger)  # tiebreaker 1: fires the event mid-tick
+    sim.schedule_call(0.0, lambda: log.append("other"))  # tiebreaker 2: already queued
+
+    sim.run(until=1)
+
+    assert log == ["trigger", "other", "waiter-resumed"]
