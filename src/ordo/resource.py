@@ -7,6 +7,10 @@ from ordo.event import Event
 if TYPE_CHECKING:
     from ordo.simulator import Simulator
 
+# Waiter entries are [priority, seq, Event, settled] lists (a heap needs a
+# plain sequence, not a dataclass) - named indices keep call sites readable.
+_PRIORITY, _SEQ, _EVENT, _SETTLED = range(4)
+
 
 # temporary stub -- replaced in Task 9 with a real implementation in stats.py
 class ResourceStats:
@@ -35,7 +39,7 @@ class Resource:
         self.sim = sim
         self.capacity = capacity
         self.in_use = 0
-        self._waiters = []  # heap of [priority, seq, Event, settled]
+        self._waiters = []  # heap of entries, see _PRIORITY/_SEQ/_EVENT/_SETTLED
         self._counter = itertools.count()
         self.stats = ResourceStats(sim, self)
 
@@ -52,32 +56,38 @@ class Resource:
         """
         return _AcquireAwaitable(self, timeout, priority)
 
-    def _request(self, timeout: Optional[float], priority: int) -> Event:
-        """Returns an Event that resolves to True (granted) or False (reneged)."""
+    def _request(self, timeout: Optional[float], priority: int):
+        """Enqueues (or immediately grants) a request.
+
+        Returns `(event, entry)`: `event` resolves to True (granted) or
+        False (reneged); `entry` is the waiter list entry to pass to
+        `_remove_waiter` for abandonment cleanup, or None if the request
+        was granted immediately (never enqueued).
+        """
         result = Event()
         if self.in_use < self.capacity:
             self.in_use += 1
             self.stats._record_wait(0.0)
             self.sim.schedule_call(0.0, lambda: result.succeed(True))
-            return result
+            return result, None
 
         seq = next(self._counter)
-        entry = [priority, seq, result, False]  # last field: settled flag
+        entry = [priority, seq, result, False]
         heapq.heappush(self._waiters, entry)
         self.stats._enter_queue()
 
         if timeout is not None:
             def on_timeout(entry=entry):
-                if entry[3]:
+                if entry[_SETTLED]:
                     return
-                entry[3] = True
+                entry[_SETTLED] = True
                 self._remove_waiter(entry)
                 self.stats._leave_queue()
                 result.succeed(False)
 
             self.sim.schedule_call(timeout, on_timeout)
 
-        return result
+        return result, entry
 
     def _remove_waiter(self, entry) -> None:
         """Mark a waiter entry settled and drop it from the heap, if still present.
@@ -89,7 +99,7 @@ class Resource:
         can never resolve its Event a second time or hand a slot to a
         coroutine that isn't waiting for it anymore.
         """
-        entry[3] = True
+        entry[_SETTLED] = True
         try:
             self._waiters.remove(entry)
             heapq.heapify(self._waiters)
@@ -100,19 +110,19 @@ class Resource:
         """Free a slot, handing it to the next waiting process, if any."""
         while self._waiters:
             entry = heapq.heappop(self._waiters)
-            if entry[3]:
+            if entry[_SETTLED]:
                 continue  # already reneged/abandoned; skip and try the next waiter
-            entry[3] = True
+            entry[_SETTLED] = True
             self.stats._leave_queue()
             self.stats._record_wait(0.0)
-            entry[2].succeed(True)
+            entry[_EVENT].succeed(True)
             return
         self.in_use -= 1
         self.stats._utilization_changed()
 
     @property
     def queue(self):
-        return tuple(e[2] for e in sorted(self._waiters) if not e[3])
+        return tuple(e[_EVENT] for e in sorted(self._waiters) if not e[_SETTLED])
 
 
 class _AcquireAwaitable:
@@ -126,16 +136,12 @@ class _AcquireAwaitable:
         self._entry = None
 
     def __await__(self):
-        result = self.resource._request(self.timeout, self.priority)
-        # Find the waiter entry (if any) this request enqueued, so we can
+        result, self._entry = self.resource._request(self.timeout, self.priority)
+        # self._entry is the waiter list entry this request enqueued (None
+        # if it was granted immediately and never queued), kept so we can
         # clean it up if the wait is abandoned (e.g. the coroutine is
         # interrupted while still queued) rather than granted/reneged
-        # normally. Immediate grants don't enqueue an entry at all.
-        for entry in self.resource._waiters:
-            if entry[2] is result:
-                self._entry = entry
-                break
-
+        # normally.
         try:
             got = yield from result.__await__()
         except BaseException:
@@ -164,7 +170,7 @@ class _AcquireAwaitable:
             #    grant with no one left to call release() for it -- so we
             #    must release it back ourselves, exactly as if we'd
             #    acquired it and immediately given it up.
-            if self._entry is not None and not self._entry[3]:
+            if self._entry is not None and not self._entry[_SETTLED]:
                 self.resource._remove_waiter(self._entry)
             elif result.triggered and result.ok and result.value:
                 self.resource.release()
