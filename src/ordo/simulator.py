@@ -43,6 +43,38 @@ class Simulator:
         """Create a shared resource with limited capacity."""
         return Resource(self, capacity)
 
+    def any_of(self, events: list["Event"]) -> "Event":
+        """Returns an Event that fires with the first event in `events` to fire."""
+        result = Event()
+
+        def on_any(ev: Event) -> None:
+            if not result.triggered:
+                result.succeed(ev)
+
+        for ev in events:
+            ev.add_callback(on_any)
+        return result
+
+    def all_of(self, events: list["Event"]) -> "Event":
+        """Returns an Event that fires once every event in `events` has fired."""
+        result = Event()
+        events = list(events)
+        remaining = len(events)
+
+        if remaining == 0:
+            result.succeed([])
+            return result
+
+        def on_one(_ev: Event) -> None:
+            nonlocal remaining
+            remaining -= 1
+            if remaining == 0:
+                result.succeed(events)
+
+        for ev in events:
+            ev.add_callback(on_one)
+        return result
+
     def _resume(
         self,
         coro: Coroutine,

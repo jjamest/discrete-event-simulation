@@ -97,3 +97,49 @@ def test_event_resumption_goes_behind_same_tick_work_already_queued():
     sim.run(until=1)
 
     assert log == ["trigger", "other", "waiter-resumed"]
+
+
+def test_sleep_still_works_as_before():
+    sim = Simulator()
+    log = []
+
+    async def waiter():
+        await sim.sleep(5)
+        log.append(sim.now)
+
+    sim.process(waiter())
+    sim.run(until=10)
+    assert log == [5.0]
+
+
+def test_any_of_resolves_on_first_event():
+    sim = Simulator()
+    log = []
+    e1, e2 = Event(), Event()
+
+    async def waiter():
+        result = await sim.any_of([e1, e2])
+        log.append((result, sim.now))
+
+    sim.process(waiter())
+    sim.schedule_call(3.0, lambda: e1.succeed("first"))
+    sim.schedule_call(7.0, lambda: e2.succeed("second"))
+    sim.run(until=10)
+    assert log == [(e1, 3.0)]
+    assert e1.value == "first"
+
+
+def test_all_of_resolves_when_all_fire():
+    sim = Simulator()
+    log = []
+    e1, e2 = Event(), Event()
+
+    async def waiter():
+        result = await sim.all_of([e1, e2])
+        log.append((sorted(result, key=id) == sorted([e1, e2], key=id), sim.now))
+
+    sim.process(waiter())
+    sim.schedule_call(3.0, lambda: e1.succeed())
+    sim.schedule_call(7.0, lambda: e2.succeed())
+    sim.run(until=10)
+    assert log == [(True, 7.0)]
