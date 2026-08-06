@@ -21,13 +21,7 @@ class Simulator:
         the heap entry. If that Process is later resumed out-of-band
         (e.g. via interrupt()) before this entry is popped, its generation
         will have moved on, and `run()` will recognize this entry as stale
-        and drop it instead of driving the coroutine a second time. This
-        applies to any caller of schedule(), not just sim.sleep(): e.g.
-        Resource.request()/_renege()/release() (resource.py) schedule
-        grants, reneges, and slot handoffs through here too, and those are
-        subject to the same staleness check - see the KNOWN LIMITATION note
-        on Process.generation for a gap in how well that check actually
-        protects Resource waiters that get interrupted while queued.
+        and drop it instead of driving the coroutine a second time.
         Coroutines with no owning Process get generation `None`, which
         always compares as valid; in practice every coroutine passed here
         does have an owning Process by the time it reaches its first
@@ -35,8 +29,17 @@ class Simulator:
         coroutine's Process entry is removed from `_process_by_coro` (see
         `_resume`'s `_process_by_coro.pop()` calls) once it finishes, so a
         schedule() call for an already-finished coroutine also observes
-        generation `None` here - that's the mechanism behind the known
-        limitation above, not a hypothetical no-such-path case.
+        generation `None` here.
+
+        Resource grants/reneges (resource.py) do NOT go through this
+        method - they resolve an Event instead, whose fire-triggered
+        resumption is scheduled via schedule_call() and separately
+        generation-checked in `_resume`'s "event" instruction handling /
+        `_resume_from_event` (schedule_call()'s plain-callback heap
+        entries carry generation `None` unconditionally and are not
+        Coroutine targets, so they never pass through this check at all;
+        the "event" path snapshots and checks its own copy of the
+        generation for exactly this reason).
         """
         event_time = self.now + delay # when the event should be executed
         tiebreaker = next(self._counter)
@@ -124,14 +127,32 @@ class Simulator:
 
             if instruction == "sleep":
                 self.schedule(payload[0], coro)
-            elif instruction == "acquire":
-                resource, timeout = payload
-                resource.request(coro, timeout)
             elif instruction == "event":
                 event: Event = payload[0]
 
-                def on_fire(ev: Event, coro=coro) -> None:
-                    self.schedule_call(0.0, lambda: self._resume_from_event(coro, ev))
+                # Snapshot the owning Process's generation at the moment we
+                # start waiting on this event, mirroring schedule()'s
+                # staleness protection for plain coroutine resumptions.
+                # Without this, a callback-based resumption (scheduled via
+                # schedule_call, which bypasses run()'s generation check
+                # entirely since that check only applies to Coroutine
+                # targets) could fire after the coroutine has already been
+                # diverted out-of-band by interrupt() - e.g. a Resource
+                # grant that raced a concurrent interrupt() and lost. If
+                # the coroutine already finished as a result of the
+                # interrupt, driving it again would crash with
+                # "cannot reuse already awaited coroutine"; if it survived
+                # and suspended elsewhere, it would be a silent
+                # misdelivery. Both are avoided by dropping stale
+                # event-triggered resumptions here, just as run() drops
+                # stale scheduled ones.
+                proc = self._process_by_coro.get(coro)
+                generation = proc.generation if proc is not None else None
+
+                def on_fire(ev: Event, coro=coro, generation=generation) -> None:
+                    self.schedule_call(
+                        0.0, lambda: self._resume_from_event(coro, ev, generation)
+                    )
 
                 event.add_callback(on_fire)
         except StopIteration as stop:
@@ -154,8 +175,20 @@ class Simulator:
             else:
                 raise
 
-    def _resume_from_event(self, coro: Coroutine, event: Event) -> None:
-        """Resume a coroutine that was awaiting `event`, now that it has fired."""
+    def _resume_from_event(self, coro: Coroutine, event: Event, generation: Any = None) -> None:
+        """Resume a coroutine that was awaiting `event`, now that it has fired.
+
+        `generation` is the owning Process's generation snapshotted when
+        the wait began (see the "event" instruction handling in
+        `_resume`). If the Process has since moved on to a newer
+        generation (via interrupt()), this resumption is stale - the
+        coroutine has already been diverted out-of-band - so it is
+        dropped instead of driving the coroutine a second time.
+        """
+        proc = self._process_by_coro.get(coro)
+        current_generation = proc.generation if proc is not None else None
+        if generation != current_generation:
+            return
         if event.ok:
             self._resume(coro, sent_value=event.value)
         else:

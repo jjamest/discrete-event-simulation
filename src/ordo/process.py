@@ -17,43 +17,34 @@ class Process(Event):
         self._sim = sim
         # Bumped on every out-of-band resumption (currently: interrupt()).
         # Heap entries capture the generation at schedule time whenever
-        # they're scheduled via Simulator.schedule() - this isn't specific
-        # to sim.sleep(); Resource.request()/_renege()/release() (see
-        # resource.py) all go through schedule() too, for immediate grants,
-        # reneges, and slot handoffs. If the snapshotted generation no
-        # longer matches by the time the entry is popped, the entry is
-        # stale (superseded by the out-of-band resumption) and must be
-        # dropped instead of driving the coroutine again. See
+        # they're scheduled via Simulator.schedule() (used by sim.sleep()
+        # and Simulator.process()'s initial kickoff). If the snapshotted
+        # generation no longer matches by the time the entry is popped,
+        # the entry is stale (superseded by the out-of-band resumption)
+        # and must be dropped instead of driving the coroutine again. See
         # Simulator.schedule()/Simulator.run().
         #
-        # KNOWN LIMITATION (pre-Task-7 Resource only): interrupt() has no
-        # awareness of Resource internals and never removes the coroutine
-        # from Resource._waiters. If a queued waiter is interrupted and
-        # then later granted a slot (via release()) or reneges on timeout,
-        # the generation check can't reliably save us:
-        #   - If the interrupt is caught (or propagates) and the coroutine
-        #     finishes as a result, Simulator._resume() pops it from
-        #     _process_by_coro entirely, so any later Resource-originated
-        #     schedule() call for that same coroutine snapshots generation
-        #     None (indistinguishable from "no owning Process") and sails
-        #     through the check - resuming an already-finished coroutine,
-        #     which raises RuntimeError: cannot reuse already awaited
-        #     coroutine.
-        #   - If the coroutine survives the interrupt (e.g. it sleeps again
-        #     in its except-block), a later Resource-originated grant can
-        #     still be delivered into whatever *new* suspension point the
-        #     coroutine has since reached, because both were scheduled
-        #     under the same post-interrupt generation - a silent
-        #     misdelivery, not a drop.
-        # This is a real gap in the current (pre-Task-7) Resource, not just
-        # a theoretical one - see
-        # tests/test_interrupt_resource_interaction.py. It is being
-        # deferred rather than patched here because Resource is being
-        # rewritten in Task 7 on top of Event, whose design already
-        # requires "interrupting a process waiting on a Resource/Event
-        # removes it from that thing's waiter list first". Task 7 must
-        # implement that removal and include a regression test for this
-        # exact interaction.
+        # Resource (resource.py) does NOT go through Simulator.schedule()
+        # for grants/reneges/handoffs - as of Task 7 it resolves an Event
+        # instead, and Event-triggered resumptions are scheduled via
+        # schedule_call() (a plain callback, not a Coroutine heap target),
+        # which bypasses run()'s Coroutine-only generation check by
+        # construction. Simulator._resume's "event" instruction handling
+        # snapshots and checks this same generation counter itself (see
+        # `_resume_from_event`) to close that gap, so an interrupt()
+        # racing a Resource grant is still caught: a stale grant
+        # resumption is dropped rather than crashing on an already-
+        # finished coroutine or misdelivering into a new suspension
+        # point. Resource._AcquireAwaitable additionally notices when its
+        # own Event resolved to a grant that never got delivered (because
+        # it was dropped as stale) and releases the slot back, so a
+        # dropped grant doesn't leak Resource.in_use either. Interrupting
+        # a process still queued in Resource._waiters (never granted at
+        # all) is handled separately: the waiter's entry is removed from
+        # _waiters as soon as the interrupt propagates through
+        # _AcquireAwaitable.__await__, so a later release() never sees it.
+        # See tests/test_interrupt_resource_interaction.py for the full
+        # set of regression scenarios.
         self.generation = 0
 
     def interrupt(self, cause=None) -> None:
