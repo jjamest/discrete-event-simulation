@@ -3,6 +3,8 @@ import itertools
 from typing import Coroutine, Any, Optional
 
 from ordo.event import Event
+from ordo.exceptions import SimulationError
+from ordo.process import Process
 from ordo.resource import Resource
 
 class Simulator:
@@ -10,6 +12,7 @@ class Simulator:
         self.now: float = 0.0
         self.events = [] # heap
         self._counter = itertools.count()
+        self._process_by_coro: dict = {}
 
     def schedule(self, delay: float, coroutine: Coroutine, value: Any = None) -> None:
         """Schedule a coroutine to resume after some delay, sending it `value`."""
@@ -35,9 +38,12 @@ class Simulator:
 
         return VirtualSleep(self, delay)
 
-    def process(self, coroutine: Coroutine) -> None:
-        """Starts running a process"""
+    def process(self, coroutine: Coroutine) -> "Process":
+        """Starts running a process; returns a Process event that fires on completion."""
+        proc = Process(coroutine)
+        self._process_by_coro[coroutine] = proc
         self.schedule(delay=0.0, coroutine=coroutine)
+        return proc
 
     def resource(self, capacity: int = 1) -> "Resource":
         """Create a shared resource with limited capacity."""
@@ -104,9 +110,25 @@ class Simulator:
                     self.schedule_call(0.0, lambda: self._resume_from_event(coro, ev))
 
                 event.add_callback(on_fire)
-        except StopIteration:
-            # the coroutine finished
-            pass
+        except StopIteration as stop:
+            # the coroutine finished; resolve its Process, if any
+            proc = self._process_by_coro.pop(coro, None)
+            if proc is not None and not proc.triggered:
+                proc.succeed(stop.value)
+        except BaseException as exc:
+            # the coroutine raised; fail its Process, escalating to a
+            # SimulationError if nobody was awaiting it
+            proc = self._process_by_coro.pop(coro, None)
+            if proc is not None and not proc.triggered:
+                proc.fail(exc)
+                if not proc.exception_handled:
+                    raise SimulationError(
+                        f"unhandled exception in process: {exc}",
+                        sim_time=self.now,
+                        process=proc,
+                    ) from exc
+            else:
+                raise
 
     def _resume_from_event(self, coro: Coroutine, event: Event) -> None:
         """Resume a coroutine that was awaiting `event`, now that it has fired."""

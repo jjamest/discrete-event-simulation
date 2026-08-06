@@ -10,7 +10,7 @@ class Event:
     loop).
     """
 
-    __slots__ = ("triggered", "ok", "value", "exception", "_callbacks")
+    __slots__ = ("triggered", "ok", "value", "exception", "_callbacks", "exception_handled")
 
     def __init__(self) -> None:
         self.triggered = False
@@ -18,6 +18,7 @@ class Event:
         self.value: Any = None
         self.exception: Optional[BaseException] = None
         self._callbacks: list[Callable[["Event"], None]] = []
+        self.exception_handled = False
 
     def succeed(self, value: Any = None) -> None:
         if self.triggered:
@@ -30,10 +31,12 @@ class Event:
     def fail(self, exception: BaseException) -> None:
         if self.triggered:
             raise RuntimeError("Event already triggered")
+        had_watchers = bool(self._callbacks)
         self.triggered = True
         self.ok = False
         self.exception = exception
         self._fire_callbacks()
+        self.exception_handled = had_watchers
 
     def _fire_callbacks(self) -> None:
         callbacks, self._callbacks = self._callbacks, []
