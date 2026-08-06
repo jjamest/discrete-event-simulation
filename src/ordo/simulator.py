@@ -1,7 +1,8 @@
 import heapq
 import itertools
-from typing import Coroutine, Any
+from typing import Coroutine, Any, Optional
 
+from ordo.event import Event
 from ordo.resource import Resource
 
 class Simulator:
@@ -42,19 +43,45 @@ class Simulator:
         """Create a shared resource with limited capacity."""
         return Resource(self, capacity)
 
-    def _resume(self, coro: Coroutine, sent_value: Any = None) -> None:
-        """Advance a coroutine one step and act on its yielded instruction."""
+    def _resume(
+        self,
+        coro: Coroutine,
+        sent_value: Any = None,
+        sent_exception: Optional[BaseException] = None,
+    ) -> None:
+        """Advance a coroutine one step and act on its yielded instruction.
+
+        Resumes via `coro.throw(sent_exception)` if an exception is given,
+        otherwise via `coro.send(sent_value)`.
+        """
         try:
-            instruction, *payload = coro.send(sent_value)
+            if sent_exception is not None:
+                instruction, *payload = coro.throw(sent_exception)
+            else:
+                instruction, *payload = coro.send(sent_value)
 
             if instruction == "sleep":
                 self.schedule(payload[0], coro)
             elif instruction == "acquire":
                 resource, timeout = payload
                 resource.request(coro, timeout)
+            elif instruction == "event":
+                event: Event = payload[0]
+
+                def on_fire(ev: Event, coro=coro) -> None:
+                    self.schedule_call(0.0, lambda: self._resume_from_event(coro, ev))
+
+                event.add_callback(on_fire)
         except StopIteration:
             # the coroutine finished
             pass
+
+    def _resume_from_event(self, coro: Coroutine, event: Event) -> None:
+        """Resume a coroutine that was awaiting `event`, now that it has fired."""
+        if event.ok:
+            self._resume(coro, sent_value=event.value)
+        else:
+            self._resume(coro, sent_exception=event.exception)
 
     def run(self, until: float = float("inf")) -> None:
         """Main event loop"""
