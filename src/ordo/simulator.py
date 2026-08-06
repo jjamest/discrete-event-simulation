@@ -197,13 +197,44 @@ class Simulator:
         else:
             self._resume(coro, sent_exception=event.exception)
 
-    def run(self, until: float = float("inf")) -> None:
-        """Main event loop"""
-        while self.events:
-            event_time, _, target, value, generation = heapq.heappop(self.events)
+    def peek(self) -> float:
+        """Time of the next scheduled event, or inf if none pending.
 
-            if event_time > until: # or >=
+        Peeks (does not pop) the heap, so it never consumes an event.
+        """
+        return self.events[0][0] if self.events else float("inf")
+
+    def __len__(self) -> int:
+        """Number of events currently pending on the heap."""
+        return len(self.events)
+
+    def run(self, until=float("inf")) -> None:
+        """Main event loop.
+
+        `until` may be a time (float) - run until no event remains at or
+        before that time - or an Event - run until that event fires (or
+        the heap drains, whichever comes first).
+        """
+        if isinstance(until, Event):
+            stop_event = until
+            until = float("inf")
+        else:
+            stop_event = None
+
+        while self.events:
+            if stop_event is not None and stop_event.triggered:
                 break
+
+            # Peek first: only pop once we know this event is actually
+            # due (event_time <= until). Popping unconditionally and
+            # pushing back on an early stop would work too, but peeking
+            # keeps the heap untouched on the early-exit path, which is
+            # simpler to reason about and cheaper (no extra heappush).
+            event_time = self.events[0][0]
+            if event_time > until:
+                break
+
+            _, _, target, value, generation = heapq.heappop(self.events)
 
             self.now = event_time # push clock forward
 
@@ -220,3 +251,6 @@ class Simulator:
                 self._resume(target, value)
             else:
                 target() # plain zero-arg callback
+
+            if stop_event is not None and stop_event.triggered:
+                break
