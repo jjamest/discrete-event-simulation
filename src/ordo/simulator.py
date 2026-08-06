@@ -21,10 +21,22 @@ class Simulator:
         the heap entry. If that Process is later resumed out-of-band
         (e.g. via interrupt()) before this entry is popped, its generation
         will have moved on, and `run()` will recognize this entry as stale
-        and drop it instead of driving the coroutine a second time.
-        Coroutines with no owning Process (there is currently no such path
-        in practice - see Simulator.process()) get generation `None`,
-        which always compares as valid.
+        and drop it instead of driving the coroutine a second time. This
+        applies to any caller of schedule(), not just sim.sleep(): e.g.
+        Resource.request()/_renege()/release() (resource.py) schedule
+        grants, reneges, and slot handoffs through here too, and those are
+        subject to the same staleness check - see the KNOWN LIMITATION note
+        on Process.generation for a gap in how well that check actually
+        protects Resource waiters that get interrupted while queued.
+        Coroutines with no owning Process get generation `None`, which
+        always compares as valid; in practice every coroutine passed here
+        does have an owning Process by the time it reaches its first
+        suspension point (assigned in Simulator.process()), but a
+        coroutine's Process entry is removed from `_process_by_coro` (see
+        `_resume`'s `_process_by_coro.pop()` calls) once it finishes, so a
+        schedule() call for an already-finished coroutine also observes
+        generation `None` here - that's the mechanism behind the known
+        limitation above, not a hypothetical no-such-path case.
         """
         event_time = self.now + delay # when the event should be executed
         tiebreaker = next(self._counter)
