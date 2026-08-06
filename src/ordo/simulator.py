@@ -3,7 +3,7 @@ import itertools
 from typing import Coroutine, Any, Optional
 
 from ordo.event import Event
-from ordo.exceptions import SimulationError
+from ordo.exceptions import Interrupt, SimulationError
 from ordo.process import Process
 from ordo.resource import Resource
 
@@ -40,7 +40,7 @@ class Simulator:
 
     def process(self, coroutine: Coroutine) -> "Process":
         """Starts running a process; returns a Process event that fires on completion."""
-        proc = Process(coroutine)
+        proc = Process(coroutine, sim=self)
         self._process_by_coro[coroutine] = proc
         self.schedule(delay=0.0, coroutine=coroutine)
         return proc
@@ -121,7 +121,7 @@ class Simulator:
             proc = self._process_by_coro.pop(coro, None)
             if proc is not None and not proc.triggered:
                 proc.fail(exc)
-                if not proc.exception_handled:
+                if not proc.exception_handled and not isinstance(exc, Interrupt):
                     raise SimulationError(
                         f"unhandled exception in process: {exc}",
                         sim_time=self.now,

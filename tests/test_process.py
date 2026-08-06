@@ -1,6 +1,6 @@
 import pytest
 
-from ordo.exceptions import SimulationError
+from ordo.exceptions import Interrupt, SimulationError
 from ordo.simulator import Simulator
 
 
@@ -71,3 +71,33 @@ def test_fire_and_forget_process_with_no_watcher_runs_fine():
     sim.process(worker())
     sim.run(until=10)
     assert log == [2.0]
+
+
+def test_interrupt_raises_inside_sleeping_process():
+    sim = Simulator()
+    log = []
+
+    async def worker():
+        try:
+            await sim.sleep(100)
+        except Interrupt as e:
+            log.append(("interrupted", e.cause, sim.now))
+
+    proc = sim.process(worker())
+    sim.schedule_call(5.0, lambda: proc.interrupt(cause="stop"))
+    sim.run(until=10)
+    assert log == [("interrupted", "stop", 5.0)]
+
+
+def test_uncaught_interrupt_ends_process_like_any_exception():
+    sim = Simulator()
+
+    async def worker():
+        await sim.sleep(100)
+
+    proc = sim.process(worker())
+    sim.schedule_call(5.0, lambda: proc.interrupt())
+    sim.run(until=10)
+    assert proc.triggered is True
+    assert proc.ok is False
+    assert isinstance(proc.exception, Interrupt)
