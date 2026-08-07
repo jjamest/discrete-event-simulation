@@ -1,6 +1,6 @@
 import numpy as np
 
-from ordo.bayes import GammaPoissonBelief
+from ordo.bayes import GammaExponentialBelief
 from ordo.simulator import Simulator
 
 
@@ -14,7 +14,7 @@ class ServerNode:
     ):
         self.node_id = node_id
         self.true_rate = true_service_rate # Ground truth parameter (Unknown to the router)
-        self.belief = GammaPoissonBelief(shape=prior_shape, rate=prior_rate) # updating live
+        self.belief = GammaExponentialBelief(shape=prior_shape, rate=prior_rate) # updating live
         self.jobs_processed = 0
 
     async def process_job(self, sim: Simulator, job_id: int):

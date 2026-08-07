@@ -1,7 +1,7 @@
 import numpy as np
 
 
-class GammaPoissonBelief:
+class GammaExponentialBelief:
     """
     Online Bayesian belief about an event rate, using the
     Gamma-Exponential conjugate model updated from observed inter-event

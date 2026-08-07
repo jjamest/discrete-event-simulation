@@ -144,15 +144,15 @@ process (one nobody is awaiting) is re-raised from `sim.run()` wrapped in a
 
 ## Bayesian belief tracking
 
-`GammaPoissonBelief` is an online Gamma-Exponential conjugate model for
+`GammaExponentialBelief` is an online Gamma-Exponential conjugate model for
 learning an unknown event rate (e.g. a server's true service rate) from
 observed inter-event delays — handy for adaptive routing policies inside a
 simulation:
 
 ```python
-from ordo import GammaPoissonBelief
+from ordo import GammaExponentialBelief
 
-belief = GammaPoissonBelief(shape=2.0, rate=10.0)  # prior
+belief = GammaExponentialBelief(shape=2.0, rate=10.0)  # prior
 belief.observe(observed_delay)                     # update after each observation
 
 belief.mean            # posterior mean of the rate (lambda)
@@ -187,8 +187,7 @@ len(sim)                    # number of events currently pending
 ## Examples
 
 - [examples/car.py](examples/car.py) — minimal process/sleep loop
-- [examples/jobs.py](examples/jobs.py) — Thompson-sampling job router using
-  `GammaPoissonBelief` across multiple simulated server nodes
+- [examples/jobs.py](examples/jobs.py) — Thompson-sampling job router
 
 ## Testing
 
