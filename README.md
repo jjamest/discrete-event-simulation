@@ -186,5 +186,5 @@ len(sim)                    # number of events currently pending
 
 ## Examples
 
-- [examples/car.py](examples/car.py) — minimal process/sleep loop
-- [examples/jobs.py](examples/jobs.py) — Thompson-sampling job router
+- [examples/car.py](https://github.com/jjamest/discrete-event-simulation/blob/master/examples/car.py) — minimal process/sleep loop
+- [examples/jobs.py](https://github.com/jjamest/discrete-event-simulation/blob/master/examples/jobs.py) — Thompson-sampling job router
