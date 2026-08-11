@@ -5,7 +5,7 @@ if TYPE_CHECKING:
 
 
 class UsageStats:
-    """Time-weighted utilization/queue-length tracking plus wait-time samples.
+    """Provides utilization tracking and wait-time samples.
 
     Shared bookkeeping for Resource and Store. Caller is responsible for
     calling _busy_changed(n) whenever the number of in-use units changes,

@@ -4,8 +4,7 @@ import numpy as np
 class GammaExponentialBelief:
     """
     Online Bayesian belief about an event rate, using the
-    Gamma-Exponential conjugate model updated from observed inter-event
-    delays
+    Gamma-Exponential conjugate model
     """
 
     def __init__(self, shape: float = 1.0, rate: float = 1.0) -> None:

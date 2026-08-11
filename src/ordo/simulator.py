@@ -12,7 +12,7 @@ from ordo.resource import Resource
 class Simulator:
     def __init__(self, seed: Optional[int] = None) -> None:
         self.now: float = 0.0
-        self.events = [] # heap
+        self.events = [] # heap structured as (event_time, tiebreaker, target, value, generation)
         self._counter = itertools.count()
         self._process_by_coro: dict = {}
         self.rng = np.random.default_rng(seed)
@@ -44,6 +44,7 @@ class Simulator:
         the "event" path snapshots and checks its own copy of the
         generation for exactly this reason).
         """
+
         event_time = self.now + delay # when the event should be executed
         tiebreaker = next(self._counter)
         proc = self._process_by_coro.get(coroutine)
@@ -209,12 +210,13 @@ class Simulator:
         return len(self.events)
 
     def run(self, until: Union[float, Event] = float("inf")) -> None:
-        """Main event loop.
-
-        `until` may be a time (float) - run until no event remains at or
-        before that time - or an Event - run until that event fires (or
+        """The main event loop.
+        `until` may be a time (float), in which we run until no event remains at or
+        before that time. 
+        `until` may be an Event, in which we run until that event fires (or
         the heap drains, whichever comes first).
         """
+
         if isinstance(until, Event):
             stop_event = until
             until = float("inf")
@@ -234,7 +236,7 @@ class Simulator:
             if event_time > until:
                 break
 
-            _, _, target, value, generation = heapq.heappop(self.events)
+            _, _, target, value, generation = heapq.heappop(self.events) # (event_time, tiebreaker, target, value, generation)
 
             self.now = event_time # push clock forward
 

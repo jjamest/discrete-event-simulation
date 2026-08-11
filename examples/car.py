@@ -20,7 +20,6 @@ class Car:
         await self.env.sleep(duration)
 
 
-if __name__ == "__main__":
-    env = Simulator()
-    car = Car(env)
-    env.run(until=15)
+env = Simulator()
+car = Car(env)
+env.run(until=15)

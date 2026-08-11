@@ -58,25 +58,23 @@ async def smart_job_router(sim: Simulator, servers: list[ServerNode]):
         job_id += 1
 
 
-if __name__ == "__main__":
-    np.random.seed(21)
+np.random.seed(21)
+sim = Simulator()
 
-    sim = Simulator()
+# Three servers with hidden ground-truth speeds
+servers = [
+    ServerNode(node_id=0, true_service_rate=0.2), # 0.2 jobs/sec ~ 5s/job
+    ServerNode(node_id=1, true_service_rate=0.5), # 0.5 jobs/sec ~ 2s/job
+    ServerNode(node_id=2, true_service_rate=1.5), # 1.5 jobs/sec ~ 0.66s/job
+]
 
-    # Three servers with hidden ground-truth speeds
-    servers = [
-        ServerNode(node_id=0, true_service_rate=0.2), # 0.2 jobs/sec ~ 5s/job
-        ServerNode(node_id=1, true_service_rate=0.5), # 0.5 jobs/sec ~ 2s/job
-        ServerNode(node_id=2, true_service_rate=1.5), # 1.5 jobs/sec ~ 0.66s/job
-    ]
+sim.process(smart_job_router(sim, servers))
+sim.run(until=50.0)
 
-    sim.process(smart_job_router(sim, servers))
-    sim.run(until=350.0)
-
-    for s in servers:
-        print(
-            f"Node {s.node_id} | Jobs Handled: {s.jobs_processed:2d} "
-            f"| True Rate: {s.true_rate:.2f} "
-            f"| Posterior Est. Rate: {s.belief.mean:.2f} "
-            f"| Est. Delay: {s.belief.expected_delay:.2f}s"
-        )
+for s in servers:
+    print(
+        f"Node {s.node_id} | Jobs Handled: {s.jobs_processed:2d} "
+        f"| True Rate: {s.true_rate:.2f} "
+        f"| Posterior Est. Rate: {s.belief.mean:.2f} "
+        f"| Est. Delay: {s.belief.expected_delay:.2f}s"
+    )
