@@ -3,16 +3,34 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ordo"
+name = "ordo-des"
 version = "0.1.0"
 description = "A discrete event simulator."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "James Tan" }]
+dependencies = ["numpy>=1.26"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/jjamest/discrete-event-simulation"
+Repository = "https://github.com/jjamest/discrete-event-simulation"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "numpy>=1.26"]
+dev = ["pytest>=8"]

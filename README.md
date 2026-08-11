@@ -5,12 +5,14 @@ plain coroutines that suspend on `sleep()`, shared resources, queues, or other
 events, and a single-threaded event loop drives them forward in simulated
 time.
 
-## Install (editable, for development)
+## Install
 
 ```bash
-pip install -e .
-# or, with dev dependencies (pytest, numpy):
-pip install -e ".[dev]"
+pip install ordo-des
+```
+
+```python
+from ordo import Simulator
 ```
 
 ## Quick start
@@ -114,10 +116,10 @@ legitimate item value, including `None`).
 
 `Resource` and `Store` both expose a `.stats` object (`UsageStats`) with:
 
-- `utilization` — time-weighted fraction of capacity in use
-- `mean_queue_length` — time-weighted average queue length
-- `mean_wait` — mean time waiters spent queued before being served
-- `wait_times` — the raw list of recorded wait samples
+- `utilization` time-weighted fraction of capacity in use
+- `mean_queue_length` time-weighted average queue length
+- `mean_wait` mean time waiters spent queued before being served
+- `wait_times` the raw list of recorded wait samples
 
 These are computed lazily against `sim.now`, so they're accurate even if
 queried mid-simulation.
@@ -173,8 +175,6 @@ sim = Simulator(seed=42)
 sim.rng.exponential(scale=1.0)
 ```
 
-Passing the same seed reproduces the same run.
-
 ## Running until a time or an event
 
 ```python
@@ -188,9 +188,3 @@ len(sim)                    # number of events currently pending
 
 - [examples/car.py](examples/car.py) — minimal process/sleep loop
 - [examples/jobs.py](examples/jobs.py) — Thompson-sampling job router
-
-## Testing
-
-```bash
-pytest
-```
