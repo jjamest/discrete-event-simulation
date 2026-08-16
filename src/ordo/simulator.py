@@ -9,10 +9,25 @@ from ordo.exceptions import Interrupt, SimulationError
 from ordo.process import Process
 from ordo.resource import Resource
 
+
+class _VirtualSleep:
+    """Awaitable yielded by Simulator.sleep(); defined at module scope so
+    creating one doesn't pay class-definition cost on every sleep() call."""
+
+    __slots__ = ("sim", "delay")
+
+    def __init__(self, sim: "Simulator", delay: float) -> None:
+        self.sim = sim
+        self.delay = delay
+
+    def __await__(self):
+        yield ("sleep", self.delay)
+
+
 class Simulator:
     def __init__(self, seed: Optional[int] = None) -> None:
         self.now: float = 0.0
-        self.events = [] # heap structured as (event_time, tiebreaker, target, value, generation)
+        self.events = [] # heap structured as (event_time, tiebreaker, target, value, generation, is_coro)
         self._counter = itertools.count()
         self._process_by_coro: dict = {}
         self.rng = np.random.default_rng(seed)
@@ -49,25 +64,20 @@ class Simulator:
         tiebreaker = next(self._counter)
         proc = self._process_by_coro.get(coroutine)
         generation = proc.generation if proc is not None else None
-        heapq.heappush(self.events, (event_time, tiebreaker, coroutine, value, generation)) # (time, priority tiebreaker, coroutine, value, generation)
+        # is_coro=True lets run() dispatch without an isinstance() check -
+        # cheaper, and unambiguous since this is the only place a Coroutine
+        # target is ever pushed (schedule_call() pushes plain callbacks).
+        heapq.heappush(self.events, (event_time, tiebreaker, coroutine, value, generation, True)) # (time, priority tiebreaker, coroutine, value, generation, is_coro)
 
     def schedule_call(self, delay: float, func) -> None:
         """Schedule a zero-arg callback to run after some delay (not a coroutine)."""
         event_time = self.now + delay
         tiebreaker = next(self._counter)
-        heapq.heappush(self.events, (event_time, tiebreaker, func, None, None))
+        heapq.heappush(self.events, (event_time, tiebreaker, func, None, None, False))
 
     def sleep(self, delay: float):
         """Awaitable sleep that pauses the caller coroutine and schedules resumption"""
-        class VirtualSleep:
-            def __init__(self, sim, delay) -> None:
-                self.sim = sim
-                self.delay = delay
-
-            def __await__(self):
-                yield ("sleep", self.delay)
-
-        return VirtualSleep(self, delay)
+        return _VirtualSleep(self, delay)
 
     def process(self, coroutine: Coroutine) -> "Process":
         """Starts running a process; returns a Process event that fires on completion."""
@@ -236,11 +246,11 @@ class Simulator:
             if event_time > until:
                 break
 
-            _, _, target, value, generation = heapq.heappop(self.events) # (event_time, tiebreaker, target, value, generation)
+            _, _, target, value, generation, is_coro = heapq.heappop(self.events) # (event_time, tiebreaker, target, value, generation, is_coro)
 
             self.now = event_time # push clock forward
 
-            if isinstance(target, Coroutine):
+            if is_coro:
                 proc = self._process_by_coro.get(target)
                 current_generation = proc.generation if proc is not None else None
                 if generation != current_generation:
